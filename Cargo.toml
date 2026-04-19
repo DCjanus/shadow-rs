@@ -35,6 +35,7 @@ document-features = { version = "0.2", optional = true }
 
 cargo_metadata = { version = "0.23.0", optional = true, default-features = false }
 serde_json = { version = "1", default-features = false, optional = true }
+gix = { version = "0.81.0", default-features = false, features = ["revision", "status", "sha1"], optional = true }
 
 [features]
 default = ["git2", "tzdb", "build"]
@@ -44,6 +45,7 @@ std = []
 no_std = []
 
 build = ["time", "tzdb", "is_debug/std", "std"]
+gix = ["dep:gix"]
 
 
 [dev-dependencies]
