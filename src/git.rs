@@ -167,7 +167,6 @@ impl Git {
         self.init_git2(path)?;
 
         // If the gix feature is enabled without git2, then replace the corresponding values with gix.
-        #[cfg(all(feature = "gix", not(feature = "git2")))]
         self.init_gix(path)?;
 
         // use command branch
@@ -324,51 +323,54 @@ impl Git {
         Ok(())
     }
 
-    #[cfg(all(feature = "gix", not(feature = "git2")))]
+    #[allow(unused_variables)]
     fn init_gix(&mut self, path: &Path) -> SdResult<()> {
-        use crate::date_time::DateTime;
-        use crate::git::gix_mod::{gix_current_branch, gix_repo};
+        #[cfg(all(feature = "gix", not(feature = "git2")))]
+        {
+            use crate::date_time::DateTime;
+            use crate::git::gix_mod::{gix_current_branch, gix_repo};
 
-        let repo = gix_repo(path).map_err(ShadowError::new)?;
+            let repo = gix_repo(path).map_err(ShadowError::new)?;
 
-        if let Some(branch) = gix_current_branch(&repo) {
-            self.update_str(BRANCH, branch);
-        }
+            if let Some(branch) = gix_current_branch(&repo) {
+                self.update_str(BRANCH, branch);
+            }
 
-        let commit = repo.head_commit().map_err(ShadowError::new)?;
-        let commit_hash = commit.id().to_string();
-        self.update_str(COMMIT_HASH, commit_hash.clone());
-        let mut short_commit = commit_hash.as_str();
+            let commit = repo.head_commit().map_err(ShadowError::new)?;
+            let commit_hash = commit.id().to_string();
+            self.update_str(COMMIT_HASH, commit_hash.clone());
+            let mut short_commit = commit_hash.as_str();
 
-        if commit_hash.len() > 8 {
-            short_commit = short_commit.get(0..8).unwrap();
-        }
-        self.update_str(SHORT_COMMIT, short_commit.to_string());
+            if commit_hash.len() > 8 {
+                short_commit = short_commit.get(0..8).unwrap();
+            }
+            self.update_str(SHORT_COMMIT, short_commit.to_string());
 
-        let author = commit.author().map_err(ShadowError::new)?;
-        self.update_str(COMMIT_AUTHOR, gix_bstr_to_string(author.name));
-        self.update_str(COMMIT_EMAIL, gix_bstr_to_string(author.email));
+            let author = commit.author().map_err(ShadowError::new)?;
+            self.update_str(COMMIT_AUTHOR, gix_bstr_to_string(author.name));
+            self.update_str(COMMIT_EMAIL, gix_bstr_to_string(author.email));
 
-        let status_file = gix_dirty_stage(&repo)?;
-        self.update_bool(GIT_CLEAN, status_file.trim().is_empty());
-        self.update_str(GIT_STATUS_FILE, status_file);
+            let status_file = gix_dirty_stage(&repo)?;
+            self.update_bool(GIT_CLEAN, status_file.trim().is_empty());
+            self.update_str(GIT_STATUS_FILE, status_file);
 
-        let commit_time = commit.time().map_err(ShadowError::new)?;
-        self.update_int(COMMIT_TIMESTAMP, commit_time.seconds);
+            let commit_time = commit.time().map_err(ShadowError::new)?;
+            self.update_int(COMMIT_TIMESTAMP, commit_time.seconds);
 
-        if let Ok(utc_time) = time::OffsetDateTime::from_unix_timestamp(commit_time.seconds) {
-            if let Ok(offset) = time::UtcOffset::from_whole_seconds(commit_time.offset) {
-                let local_time = utc_time.to_offset(offset);
-                let date_time = DateTime::Local(local_time);
+            if let Ok(utc_time) = time::OffsetDateTime::from_unix_timestamp(commit_time.seconds) {
+                if let Ok(offset) = time::UtcOffset::from_whole_seconds(commit_time.offset) {
+                    let local_time = utc_time.to_offset(offset);
+                    let date_time = DateTime::Local(local_time);
 
-                self.update_str(COMMIT_DATE, date_time.human_format());
-                self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
-                self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
-            } else {
-                let date_time = DateTime::Utc(utc_time);
-                self.update_str(COMMIT_DATE, date_time.human_format());
-                self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
-                self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
+                    self.update_str(COMMIT_DATE, date_time.human_format());
+                    self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
+                    self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
+                } else {
+                    let date_time = DateTime::Utc(utc_time);
+                    self.update_str(COMMIT_DATE, date_time.human_format());
+                    self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
+                    self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
+                }
             }
         }
         Ok(())
