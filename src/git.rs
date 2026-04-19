@@ -3,7 +3,7 @@ use crate::ci::CiType;
 use crate::err::*;
 use crate::{DateTime, Format};
 use std::collections::BTreeMap;
-#[cfg(feature = "gix")]
+#[cfg(all(feature = "gix", not(feature = "git2")))]
 use std::convert::Infallible;
 use std::io::{BufReader, Read};
 use std::path::Path;
@@ -166,7 +166,8 @@ impl Git {
         // If the git2 feature is enabled, then replace the corresponding values with git2.
         self.init_git2(path)?;
 
-        // If the gix feature is enabled, then replace the corresponding values with gix.
+        // If the gix feature is enabled without git2, then replace the corresponding values with gix.
+        #[cfg(all(feature = "gix", not(feature = "git2")))]
         self.init_gix(path)?;
 
         // use command branch
@@ -323,49 +324,51 @@ impl Git {
         Ok(())
     }
 
-    #[allow(unused_variables)]
+    #[cfg(all(feature = "gix", not(feature = "git2")))]
     fn init_gix(&mut self, path: &Path) -> SdResult<()> {
-        #[cfg(feature = "gix")]
-        {
-            use crate::date_time::DateTime;
-            use crate::git::gix_mod::{gix_current_branch, gix_repo};
+        use crate::date_time::DateTime;
+        use crate::git::gix_mod::{gix_current_branch, gix_repo};
 
-            let repo = gix_repo(path).map_err(ShadowError::new)?;
+        let repo = gix_repo(path).map_err(ShadowError::new)?;
 
-            if let Some(branch) = gix_current_branch(&repo) {
-                self.update_str(BRANCH, branch);
-            }
+        if let Some(branch) = gix_current_branch(&repo) {
+            self.update_str(BRANCH, branch);
+        }
 
-            let commit = repo.head_commit().map_err(ShadowError::new)?;
-            let commit_hash = commit.id().to_string();
-            self.update_str(COMMIT_HASH, commit_hash.clone());
-            self.update_str(SHORT_COMMIT, commit_hash.chars().take(8).collect());
+        let commit = repo.head_commit().map_err(ShadowError::new)?;
+        let commit_hash = commit.id().to_string();
+        self.update_str(COMMIT_HASH, commit_hash.clone());
+        let mut short_commit = commit_hash.as_str();
 
-            let author = commit.author().map_err(ShadowError::new)?;
-            self.update_str(COMMIT_AUTHOR, gix_bstr_to_string(author.name));
-            self.update_str(COMMIT_EMAIL, gix_bstr_to_string(author.email));
+        if commit_hash.len() > 8 {
+            short_commit = short_commit.get(0..8).unwrap();
+        }
+        self.update_str(SHORT_COMMIT, short_commit.to_string());
 
-            let status_file = gix_dirty_stage(&repo)?;
-            self.update_bool(GIT_CLEAN, status_file.trim().is_empty());
-            self.update_str(GIT_STATUS_FILE, status_file);
+        let author = commit.author().map_err(ShadowError::new)?;
+        self.update_str(COMMIT_AUTHOR, gix_bstr_to_string(author.name));
+        self.update_str(COMMIT_EMAIL, gix_bstr_to_string(author.email));
 
-            let commit_time = commit.time().map_err(ShadowError::new)?;
-            self.update_int(COMMIT_TIMESTAMP, commit_time.seconds);
+        let status_file = gix_dirty_stage(&repo)?;
+        self.update_bool(GIT_CLEAN, status_file.trim().is_empty());
+        self.update_str(GIT_STATUS_FILE, status_file);
 
-            if let Ok(utc_time) = time::OffsetDateTime::from_unix_timestamp(commit_time.seconds) {
-                if let Ok(offset) = time::UtcOffset::from_whole_seconds(commit_time.offset) {
-                    let local_time = utc_time.to_offset(offset);
-                    let date_time = DateTime::Local(local_time);
+        let commit_time = commit.time().map_err(ShadowError::new)?;
+        self.update_int(COMMIT_TIMESTAMP, commit_time.seconds);
 
-                    self.update_str(COMMIT_DATE, date_time.human_format());
-                    self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
-                    self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
-                } else {
-                    let date_time = DateTime::Utc(utc_time);
-                    self.update_str(COMMIT_DATE, date_time.human_format());
-                    self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
-                    self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
-                }
+        if let Ok(utc_time) = time::OffsetDateTime::from_unix_timestamp(commit_time.seconds) {
+            if let Ok(offset) = time::UtcOffset::from_whole_seconds(commit_time.offset) {
+                let local_time = utc_time.to_offset(offset);
+                let date_time = DateTime::Local(local_time);
+
+                self.update_str(COMMIT_DATE, date_time.human_format());
+                self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
+                self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
+            } else {
+                let date_time = DateTime::Utc(utc_time);
+                self.update_str(COMMIT_DATE, date_time.human_format());
+                self.update_str(COMMIT_DATE_2822, date_time.to_rfc2822());
+                self.update_str(COMMIT_DATE_3339, date_time.to_rfc3339());
             }
         }
         Ok(())
@@ -518,8 +521,8 @@ pub mod gix_mod {
     use gix::Repository;
     use std::path::Path;
 
-    pub fn gix_repo<P: AsRef<Path>>(path: P) -> Result<Repository, gix::open::Error> {
-        gix::open(path.as_ref().to_path_buf())
+    pub fn gix_repo<P: AsRef<Path>>(path: P) -> Result<Repository, gix::discover::Error> {
+        gix::discover(path)
     }
 
     pub fn gix_current_branch(repo: &Repository) -> Option<String> {
@@ -537,7 +540,15 @@ pub mod gix_mod {
 /// It's use default feature.This function try use [git2] crates get current branch.
 /// If not use git2 feature,then try use [Command] to get.
 pub fn branch() -> String {
-    #[cfg(feature = "gix")]
+    #[cfg(feature = "git2")]
+    {
+        use crate::git::git2_mod::{git2_current_branch, git_repo};
+        git_repo(".")
+            .map(|x| git2_current_branch(&x))
+            .unwrap_or_else(|_| command_current_branch())
+            .unwrap_or_default()
+    }
+    #[cfg(all(not(feature = "git2"), feature = "gix"))]
     {
         use crate::git::gix_mod::{gix_current_branch, gix_repo};
         gix_repo(".")
@@ -546,15 +557,7 @@ pub fn branch() -> String {
             .or_else(command_current_branch)
             .unwrap_or_default()
     }
-    #[cfg(all(not(feature = "gix"), feature = "git2"))]
-    {
-        use crate::git::git2_mod::{git2_current_branch, git_repo};
-        git_repo(".")
-            .map(|x| git2_current_branch(&x))
-            .unwrap_or_else(|_| command_current_branch())
-            .unwrap_or_default()
-    }
-    #[cfg(all(not(feature = "gix"), not(feature = "git2")))]
+    #[cfg(all(not(feature = "git2"), not(feature = "gix")))]
     {
         command_current_branch().unwrap_or_default()
     }
@@ -572,7 +575,15 @@ pub fn tag() -> String {
 ///
 /// if nothing,It means clean:true. On the contrary, it is 'dirty':false
 pub fn git_clean() -> bool {
-    #[cfg(feature = "gix")]
+    #[cfg(feature = "git2")]
+    {
+        use crate::git::git2_mod::git_repo;
+        git_repo(".")
+            .map(|x| Git::git2_dirty_stage(&x))
+            .map(|x| x.trim().is_empty())
+            .unwrap_or(true)
+    }
+    #[cfg(all(not(feature = "git2"), feature = "gix"))]
     {
         use crate::git::gix_mod::gix_repo;
         gix_repo(".")
@@ -581,15 +592,7 @@ pub fn git_clean() -> bool {
             .map(|x| x.trim().is_empty())
             .unwrap_or(true)
     }
-    #[cfg(all(not(feature = "gix"), feature = "git2"))]
-    {
-        use crate::git::git2_mod::git_repo;
-        git_repo(".")
-            .map(|x| Git::git2_dirty_stage(&x))
-            .map(|x| x.trim().is_empty())
-            .unwrap_or(true)
-    }
-    #[cfg(all(not(feature = "gix"), not(feature = "git2")))]
+    #[cfg(all(not(feature = "git2"), not(feature = "gix")))]
     {
         command_git_clean()
     }
@@ -601,7 +604,14 @@ pub fn git_clean() -> bool {
 ///
 /// Example output:`   * examples/builtin_fn.rs (dirty)`
 pub fn git_status_file() -> String {
-    #[cfg(feature = "gix")]
+    #[cfg(feature = "git2")]
+    {
+        use crate::git::git2_mod::git_repo;
+        git_repo(".")
+            .map(|x| Git::git2_dirty_stage(&x))
+            .unwrap_or_default()
+    }
+    #[cfg(all(not(feature = "git2"), feature = "gix"))]
     {
         use crate::git::gix_mod::gix_repo;
         gix_repo(".")
@@ -609,14 +619,7 @@ pub fn git_status_file() -> String {
             .map(|x| x.unwrap_or_default())
             .unwrap_or_default()
     }
-    #[cfg(all(not(feature = "gix"), feature = "git2"))]
-    {
-        use crate::git::git2_mod::git_repo;
-        git_repo(".")
-            .map(|x| Git::git2_dirty_stage(&x))
-            .unwrap_or_default()
-    }
-    #[cfg(all(not(feature = "gix"), not(feature = "git2")))]
+    #[cfg(all(not(feature = "git2"), not(feature = "gix")))]
     {
         command_git_status_file()
     }
@@ -816,7 +819,7 @@ fn find_branch_in(path: &Path) -> Option<String> {
     GitCommandExecutor::new(path).exec(&["symbolic-ref", "--short", "HEAD"])
 }
 
-#[cfg(feature = "gix")]
+#[cfg(all(feature = "gix", not(feature = "git2")))]
 fn gix_dirty_stage(repo: &gix::Repository) -> SdResult<String> {
     let mut dirty_files = Vec::new();
     let mut staged_files = Vec::new();
@@ -854,7 +857,7 @@ fn gix_dirty_stage(repo: &gix::Repository) -> SdResult<String> {
     Ok(filter_git_dirty_stage(dirty_files, staged_files))
 }
 
-#[cfg(feature = "gix")]
+#[cfg(all(feature = "gix", not(feature = "git2")))]
 fn gix_bstr_to_string(input: &gix::bstr::BStr) -> String {
     String::from_utf8_lossy(input.as_ref()).to_string()
 }
@@ -921,6 +924,18 @@ mod tests {
             assert!(git2_branch.is_some());
             assert!(command_branch.is_some());
             assert_eq!(command_branch, git2_branch);
+        }
+
+        #[cfg(feature = "gix")]
+        {
+            use crate::git::gix_mod::{gix_current_branch, gix_repo};
+            let gix_branch = gix_repo(".")
+                .map(|x| gix_current_branch(&x))
+                .unwrap_or(None);
+            let command_branch = command_current_branch();
+            assert!(gix_branch.is_some());
+            assert!(command_branch.is_some());
+            assert_eq!(command_branch, gix_branch);
         }
 
         assert_eq!(Some(branch()), command_current_branch());
