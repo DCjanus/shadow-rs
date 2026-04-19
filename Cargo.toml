@@ -45,7 +45,6 @@ std = []
 no_std = []
 
 build = ["time", "tzdb", "is_debug/std", "std"]
-gix = ["dep:gix"]
 
 
 [dev-dependencies]
